@@ -74,6 +74,7 @@
   .area-card .actions{display:flex;gap:12px;margin-top:7px;}
   .area-card .actions button{font-size:11px;background:none;border:none;cursor:pointer;padding:0;}
   .area-card .edit{color:var(--accent);}
+  .area-card .dup{color:var(--text-dim);}
   .area-card .del{color:var(--danger);}
   .area-card .actions button:hover{text-decoration:underline;}
   #emptystate{padding:16px 14px;font-size:12.5px;color:var(--text-dim);text-align:center;}
@@ -149,9 +150,10 @@
   .pop-voflags{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
   .pop-voflag{font-size:10px;padding:2px 8px;border-radius:20px;background:#1c2b29;border:1px solid var(--accent-soft);color:var(--accent);letter-spacing:.03em;}
   .pop-note{font-size:12px;color:var(--accent);margin-bottom:10px;font-style:italic;line-height:1.4;}
-  .pop-actions{display:flex;gap:8px;}
-  .pop-edit{background:var(--accent-soft);border:1px solid var(--accent);color:#eafffb;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;}
-  .pop-del{background:var(--danger);border:none;color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;}
+  .pop-actions{display:flex;gap:6px;flex-wrap:wrap;}
+  .pop-edit{background:var(--accent-soft);border:1px solid var(--accent);color:#eafffb;padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;}
+  .pop-dup{background:var(--panel-soft);border:1px solid var(--line);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;}
+  .pop-del{background:var(--danger);border:none;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;}
   .choose-row{padding:7px 4px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px;display:flex;justify-content:space-between;gap:8px;align-items:center;}
   .choose-row:last-child{border-bottom:none;}
   .choose-row:hover{color:var(--accent);}
@@ -264,8 +266,6 @@
       <div class="field-hint">Angles are compass bearings from the tower: 0°=N, 90°=E, 180°=S, 270°=W.</div>
     </div>
 
-    <label>Tower name / location</label>
-    <input id="towerNameInput" placeholder="e.g. Good Hope Tower" />
     <label>Additional details (optional)</label>
     <textarea id="noteInput" placeholder="e.g. Rooftop site, 3 sectors"></textarea>
     <div class="modal-actions">
@@ -317,7 +317,7 @@
     const meta = TYPE_META[type] || TYPE_META['4g'];
     return { color: MARK_COLOR, weight: 2.5, opacity: 0.95, fillColor: MARK_COLOR, fillOpacity: 0.16, dashArray: meta.dash };
   }
-  function areaLabel(area){ return area.towerName ? area.towerName : 'Unnamed tower'; }
+  function areaLabel(area){ const meta = TYPE_META[area.type] || TYPE_META['4g']; return meta.label; }
   function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function voFlagsHtml(area, cls){
     let html = '';
@@ -584,7 +584,7 @@
   function dedupeMatches(matches){
     const seen = new Map();
     matches.forEach(a=>{
-      const key = a.type + '|' + (a.towerName||'') + '|' + (a.volte?1:0) + '|' + (a.vonr?1:0) + '|' + (a.note||'');
+      const key = a.type + '|' + (a.volte?1:0) + '|' + (a.vonr?1:0) + '|' + (a.note||'');
       if(!seen.has(key)) seen.set(key, a);
     });
     return Array.from(seen.values());
@@ -603,11 +603,12 @@
   function buildPopupHtml(area){
     const meta = TYPE_META[area.type] || TYPE_META['4g'];
     const voHtml = voFlagsHtml(area, 'pop-voflag');
-    return `<div class="pop-title">${meta.label} — ${escapeHtml(areaLabel(area))}</div>
+    return `<div class="pop-title">${meta.label} coverage zone</div>
        ${voHtml ? `<div class="pop-voflags">${voHtml}</div>` : ''}
        ${area.note ? `<div class="pop-note">${escapeHtml(area.note)}</div>` : ''}
        ${isAdmin ? `<div class="pop-actions">
          <button class="pop-edit" data-id="${area.id}">Edit shape</button>
+         <button class="pop-dup" data-id="${area.id}">Duplicate</button>
          <button class="pop-del" data-id="${area.id}">Remove</button>
        </div>` : ''}`;
   }
@@ -616,8 +617,10 @@
     if(!area) return;
     const popup = L.popup({ maxWidth:280 }).setLatLng(latlng).setContent(buildPopupHtml(area)).openOn(map);
     const editBtn = document.querySelector(`.pop-edit[data-id="${area.id}"]`);
+    const dupBtn = document.querySelector(`.pop-dup[data-id="${area.id}"]`);
     const delBtn = document.querySelector(`.pop-del[data-id="${area.id}"]`);
     if(editBtn) editBtn.addEventListener('click', ()=>{ map.closePopup(); startEditArea(area.id); });
+    if(dupBtn) dupBtn.addEventListener('click', ()=> duplicateArea(area.id));
     if(delBtn) delBtn.addEventListener('click', ()=> removeArea(area.id));
   }
 
@@ -644,6 +647,28 @@
     showToast('Tower removed.');
   }
 
+  async function duplicateArea(id){
+    if(!isAdmin){ showToast('Sign in as the map owner to duplicate coverage zones.'); return; }
+    const source = areas.find(a => a.id===id);
+    if(!source) return;
+    map.closePopup();
+    pushUndo();
+    const copy = JSON.parse(JSON.stringify(source));
+    copy.id = 'a_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+    // Nudge the copy slightly so it doesn't sit exactly on top of the original — drag it into place.
+    const OFFSET = 0.0015; // roughly 150m
+    if(copy.shapeType === 'sector'){
+      copy.center = [copy.center[0] + OFFSET, copy.center[1] + OFFSET];
+    } else {
+      copy.coords = copy.coords.map(c => [c[0] + OFFSET, c[1] + OFFSET]);
+    }
+    areas.push(copy);
+    renderArea(copy);
+    applyFilters(); renderList(); applyZoomLabelVisibility();
+    const ok = await persist();
+    if(ok) showToast('Coverage zone duplicated — drag it into place.');
+  }
+
   function renderList(){
     const list = document.getElementById('arealist');
     if(!areas.length){ list.innerHTML = '<div id="emptystate">No towers yet. Draw a polygon or a tower circle to add one.</div>'; return; }
@@ -654,18 +679,18 @@
       const card = document.createElement('div');
       card.className = 'area-card';
       card.innerHTML = `
-        <div class="row1"><span>${escapeHtml(areaLabel(area))}</span><span class="badge">${meta.label}</span></div>
-        <div class="sub">${area.shapeType==='sector' ? 'Tower circle' : 'Polygon area'}</div>
+        <div class="row1"><span>${area.shapeType==='sector' ? 'Tower circle' : 'Polygon area'}</span><span class="badge">${meta.label}</span></div>
         ${voHtml ? `<div class="voflags">${voHtml}</div>` : ''}
         ${area.note ? `<div class="note">${escapeHtml(area.note)}</div>` : ''}
-        ${isAdmin ? `<div class="actions"><button class="edit">Edit shape</button><button class="del">Remove</button></div>` : ''}`;
+        ${isAdmin ? `<div class="actions"><button class="edit">Edit shape</button><button class="dup">Duplicate</button><button class="del">Remove</button></div>` : ''}`;
       card.addEventListener('click', (e)=>{
-        if(e.target.classList.contains('del') || e.target.classList.contains('edit')) return;
+        if(e.target.classList.contains('del') || e.target.classList.contains('edit') || e.target.classList.contains('dup')) return;
         const entry = layerById[area.id];
         if(entry){ map.fitBounds(entry.polygon.getBounds(), {maxZoom:16}); openDetailPopup(area, entry.polygon.getBounds().getCenter()); }
       });
       const delBtn = card.querySelector('.del'); if(delBtn) delBtn.addEventListener('click', (e)=>{ e.stopPropagation(); removeArea(area.id); });
       const editBtn = card.querySelector('.edit'); if(editBtn) editBtn.addEventListener('click', (e)=>{ e.stopPropagation(); startEditArea(area.id); });
+      const dupBtn = card.querySelector('.dup'); if(dupBtn) dupBtn.addEventListener('click', (e)=>{ e.stopPropagation(); duplicateArea(area.id); });
       list.appendChild(card);
     });
   }
@@ -942,7 +967,6 @@
   const overlay = document.getElementById('overlay');
   const modalTitle = document.getElementById('modalTitle');
   const shapeFields = document.getElementById('shapeFields');
-  const towerNameInput = document.getElementById('towerNameInput');
   const noteInput = document.getElementById('noteInput');
   const radiusInput = document.getElementById('radiusInput');
   const startAngleInput = document.getElementById('startAngleInput');
@@ -1018,7 +1042,6 @@
       const a = modalCtx.editingArea;
       selectedType = a.type;
       document.querySelectorAll('.type-choice button').forEach(b=>b.classList.toggle('sel', b.dataset.type===a.type));
-      towerNameInput.value = a.towerName || '';
       noteInput.value = a.note || '';
       volteInput.checked = !!a.volte; vonrInput.checked = !!a.vonr; syncVoChoiceStyle();
       if(isSector){
