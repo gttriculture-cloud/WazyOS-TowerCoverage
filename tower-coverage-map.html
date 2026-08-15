@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tower Coverage Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<style>
+  :root{
+    --panel:#17191b; --panel-soft:#1f2224; --line:#2c2f32;
+    --text:#e9e8e3; --text-dim:#9a9d9f;
+    --accent:#5fb3a8; --accent-soft:#3d7c74;
+    --mark:#f3f1ea; --danger:#c9756a; --radius:10px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;
+    font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0c0d0e;color:var(--text);}
+  #map{position:absolute;inset:0;z-index:1;background:#0c0d0e;}
+  #map .leaflet-tile{ filter: brightness(0.72) saturate(0.8) contrast(1.03); }
+  .leaflet-control-layers{ background:var(--panel) !important; border:1px solid var(--line) !important; color:var(--text) !important; border-radius:8px !important; box-shadow:none !important; }
+  .leaflet-control-layers-toggle{ filter:invert(1); }
+  .leaflet-control-layers label{ color:var(--text) !important; font-size:12.5px; }
+  .leaflet-control-layers-separator{ border-color:var(--line) !important; }
+
+  #toolbar{
+    position:absolute; top:14px; left:14px; z-index:500;
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; max-width:calc(100% - 320px);
+    box-shadow:0 6px 18px rgba(0,0,0,.35);
+  }
+  #toolbar button{
+    background:var(--panel-soft); color:var(--text); border:1px solid var(--line);
+    padding:9px 14px; border-radius:8px; font-size:13.5px; cursor:pointer;
+    display:flex; align-items:center; gap:7px; transition:background .15s,border-color .15s,opacity .15s;
+  }
+  #toolbar button:hover{background:#26292c;border-color:#3a3e41;}
+  #toolbar button.primary{background:var(--accent-soft); border-color:var(--accent); color:#eafffb;}
+  #toolbar button.primary:hover{background:var(--accent);}
+  #toolbar button.active{background:var(--danger); border-color:var(--danger); color:#fff;}
+  #toolbar button:disabled{opacity:.35; cursor:not-allowed;}
+  #toolbar button:disabled:hover{background:var(--panel-soft);border-color:var(--line);}
+  #toolbar .sep{width:1px;align-self:stretch;background:var(--line);margin:2px 2px;}
+  #toolbar label.chk{display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--text-dim);cursor:pointer;user-select:none;}
+
+  #sidepanel{
+    position:absolute; top:14px; right:14px; z-index:499; width:280px; max-height:calc(100% - 30px);
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    box-shadow:0 6px 18px rgba(0,0,0,.35); display:flex; flex-direction:column; overflow:hidden;
+  }
+  #sidepanel h3{margin:0;padding:12px 14px 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);border-bottom:1px solid var(--line);}
+  #legend{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:7px;}
+  .leg-row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-dim);}
+  .leg-swatch{width:26px;height:0;border-top:3px solid var(--mark);}
+  .leg-swatch.g4{border-top-style:solid;}
+  .leg-swatch.g5{border-top-style:dashed;}
+  .leg-swatch.g5plus{border-top-style:dotted;border-top-width:4px;}
+  #arealist{overflow-y:auto;flex:1;min-height:0;padding:6px 8px;}
+  #savedAreasSection{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;}
+  #filterSection{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px;}
+  #filterSection label.chk{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-dim);cursor:pointer;user-select:none;}
+  .area-card{background:var(--panel-soft); border:1px solid var(--line); border-radius:8px;
+    padding:9px 10px; margin:6px 0; cursor:pointer; transition:border-color .15s;}
+  .area-card:hover{border-color:var(--accent);}
+  .area-card .row1{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;gap:6px;}
+  .area-card .row1 span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .area-card .badge{font-size:10px;padding:2px 7px;border-radius:20px;border:1px solid var(--mark);color:var(--mark);letter-spacing:.03em;flex-shrink:0;}
+  .area-card .sub{font-size:11.5px;color:var(--text-dim);margin-top:4px;line-height:1.4;}
+  .area-card .voflags{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;}
+  .area-card .voflag{font-size:9.5px;padding:1px 6px;border-radius:20px;background:#1c2b29;border:1px solid var(--accent-soft);color:var(--accent);letter-spacing:.03em;}
+  .area-card .note{font-size:11px;color:var(--accent);margin-top:3px;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .area-card .actions{display:flex;gap:12px;margin-top:7px;}
+  .area-card .actions button{font-size:11px;background:none;border:none;cursor:pointer;padding:0;}
+  .area-card .edit{color:var(--accent);}
+  .area-card .del{color:var(--danger);}
+  .area-card .actions button:hover{text-decoration:underline;}
+  #emptystate{padding:16px 14px;font-size:12.5px;color:var(--text-dim);text-align:center;}
+
+  #authSection{padding:12px 14px;border-bottom:1px solid var(--line);}
+  #authLoggedOut{display:flex;}
+  #authLoggedOut button{width:100%;background:var(--accent-soft); border:1px solid var(--accent); color:#eafffb;
+    padding:8px 10px; border-radius:8px; font-size:12.5px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:7px;}
+  #authLoggedOut button:hover{background:var(--accent);}
+  #authLoggedIn{display:none;align-items:center;justify-content:space-between;gap:8px;}
+  #authUserBlock{display:flex;flex-direction:column;gap:2px;overflow:hidden;}
+  #authUserEmail{font-size:11.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:170px;}
+  #authRoleBadge{font-size:10px;letter-spacing:.03em;text-transform:uppercase;}
+  #authRoleBadge.admin{color:var(--accent);}
+  #authRoleBadge.viewer{color:var(--text-dim);}
+  #googleSignOutBtn{background:none;border:1px solid var(--line);color:var(--text-dim);padding:5px 9px;border-radius:6px;font-size:11px;cursor:pointer;flex-shrink:0;}
+  #googleSignOutBtn:hover{border-color:var(--danger);color:var(--danger);}
+  #authStatusNote{font-size:10.5px;color:var(--text-dim);margin-top:6px;line-height:1.4;}
+
+  #drawbanner, #towerbanner, #editbar{
+    position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:600;
+    background:var(--accent-soft); border:1px solid var(--accent); color:#eafffb;
+    padding:9px 16px; border-radius:20px; font-size:13px; display:none; align-items:center; gap:10px;
+    box-shadow:0 6px 18px rgba(0,0,0,.4); max-width:560px; text-align:center;
+  }
+  #drawbanner button, #towerbanner button, #editbar button{background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.3);color:#fff;
+    padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;}
+  #towerbanner button:disabled{opacity:.4;cursor:not-allowed;}
+
+  #overlay{position:absolute;inset:0;background:rgba(6,7,8,.55);z-index:900;display:none;align-items:center;justify-content:center;}
+  #modal{background:var(--panel); border:1px solid var(--line); border-radius:14px; width:360px;
+    max-height:88vh; overflow-y:auto; padding:20px; box-shadow:0 20px 50px rgba(0,0,0,.5);}
+  #modal h2{margin:0 0 14px;font-size:16px;cursor:move;user-select:none;padding-bottom:8px;border-bottom:1px dashed var(--line);}
+  #modal.dragged{position:fixed;margin:0;}
+  #modal label{display:block;font-size:12px;color:var(--text-dim);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.04em;}
+  #modal input, #modal textarea{width:100%; background:var(--panel-soft); border:1px solid var(--line); color:var(--text);
+    padding:9px 10px; border-radius:7px; font-size:13.5px; font-family:inherit;}
+  #modal textarea{resize:vertical;min-height:54px;}
+  #modal input:focus, #modal textarea:focus{outline:none;border-color:var(--accent);}
+  .type-choice{display:flex;gap:6px;}
+  .type-choice button{flex:1; padding:9px 4px; border-radius:7px; border:1px solid var(--line); background:var(--panel-soft);
+    color:var(--text-dim); font-size:12px; cursor:pointer;}
+  .type-choice button.sel{border-color:var(--accent); color:var(--accent); background:#1c2b29;}
+  #shapeFields{display:none;}
+  .preset-row{display:flex;gap:6px;margin-top:6px;}
+  .preset-row button{flex:1;padding:7px 2px;border-radius:6px;border:1px solid var(--line);background:var(--panel-soft);color:var(--text-dim);font-size:11px;cursor:pointer;}
+  .preset-row button.sel{border-color:var(--accent);color:var(--accent);}
+  .field-hint{font-size:10.5px;color:var(--text-dim);margin-top:4px;}
+  .two-col{display:flex;gap:10px;}
+  .two-col>div{flex:1;}
+  .vo-row{display:flex;gap:14px;margin-top:8px;}
+  .vo-choice{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-dim);cursor:pointer;user-select:none;
+    background:var(--panel-soft);border:1px solid var(--line);padding:8px 12px;border-radius:7px;flex:1;}
+  .vo-choice input{accent-color:var(--accent);width:15px;height:15px;}
+  .vo-choice.on{border-color:var(--accent);color:var(--accent);background:#1c2b29;}
+  #modal .modal-actions{display:flex; gap:8px; margin-top:20px;}
+  #modal .modal-actions button{flex:1; padding:10px; border-radius:8px; border:1px solid var(--line); cursor:pointer; font-size:13.5px;}
+  #modal .btn-save{background:var(--accent-soft); border-color:var(--accent); color:#eafffb;}
+  #modal .btn-cancel{background:var(--panel-soft); color:var(--text-dim);}
+
+  #toast{position:absolute; bottom:18px; left:50%; transform:translateX(-50%); z-index:700;
+    background:var(--panel); border:1px solid var(--line); color:var(--text); padding:9px 16px;
+    border-radius:8px; font-size:12.5px; display:none; box-shadow:0 6px 16px rgba(0,0,0,.4);}
+
+  .cov-tooltip{background:rgba(15,16,17,.85)!important; border:1px solid rgba(243,241,234,.35)!important;
+    color:var(--mark)!important; font-size:11px!important; padding:2px 7px!important;
+    box-shadow:none!important; border-radius:5px!important;}
+  .cov-tooltip::before{display:none!important;}
+  .leaflet-popup-content-wrapper{background:var(--panel);color:var(--text);border-radius:10px;}
+  .leaflet-popup-tip{background:var(--panel);}
+  .pop-title{font-weight:700;font-size:13.5px;margin-bottom:4px;}
+  .pop-sub{font-size:12px;color:var(--text-dim);margin-bottom:6px;line-height:1.4;}
+  .pop-voflags{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
+  .pop-voflag{font-size:10px;padding:2px 8px;border-radius:20px;background:#1c2b29;border:1px solid var(--accent-soft);color:var(--accent);letter-spacing:.03em;}
+  .pop-note{font-size:12px;color:var(--accent);margin-bottom:10px;font-style:italic;line-height:1.4;}
+  .pop-actions{display:flex;gap:8px;}
+  .pop-edit{background:var(--accent-soft);border:1px solid var(--accent);color:#eafffb;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;}
+  .pop-del{background:var(--danger);border:none;color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;}
+  .choose-row{padding:7px 4px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px;display:flex;justify-content:space-between;gap:8px;align-items:center;}
+  .choose-row:last-child{border-bottom:none;}
+  .choose-row:hover{color:var(--accent);}
+  .choose-title{font-size:12px;color:var(--text-dim);margin-bottom:4px;}
+
+  .vertex-marker{width:14px;height:14px;border-radius:50%;
+    background:var(--mark); border:2px solid #14161a; box-shadow:0 0 0 2px rgba(243,241,234,.35); cursor:grab;}
+  .vertex-marker.vertex-first{ background:var(--accent); box-shadow:0 0 0 3px rgba(95,179,168,.55); }
+  .vertex-marker.tower-marker{ width:18px;height:18px; background:var(--accent); box-shadow:0 0 0 4px rgba(95,179,168,.35); }
+  .vertex-marker.vertex-mid{ width:10px;height:10px; background:rgba(243,241,234,.5); border:1px solid rgba(243,241,234,.75);
+    box-shadow:none; cursor:copy; }
+  .vertex-marker.vertex-mid:hover{ background:var(--mark); transform:scale(1.2); }
+  .vertex-marker:active{cursor:grabbing;}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="toolbar">
+  <button id="drawBtn" class="primary" style="display:none;">✏️ Draw polygon</button>
+  <button id="towerBtn" class="primary" style="display:none;">📡 Draw tower circle</button>
+  <div class="sep" style="display:none;"></div>
+  <button id="undoBtn" disabled style="display:none;">↶ Undo</button>
+  <button id="redoBtn" disabled style="display:none;">↷ Redo</button>
+  <div class="sep" style="display:none;"></div>
+  <label class="chk"><input type="checkbox" id="labelsToggle" checked> Place labels</label>
+</div>
+
+<div id="drawbanner">
+  <span>Click to place points (drag any point to reposition it). Click the first point again, or press Enter, to close the shape.</span>
+  <button id="cancelDraw">Cancel (Esc)</button>
+</div>
+
+<div id="towerbanner">
+  <span id="towerText">Click the map to place the tower location.</span>
+  <button id="towerConfirm" disabled>Set coverage →</button>
+  <button id="towerCancel">Cancel (Esc)</button>
+</div>
+
+<div id="editbar">
+  <span>Drag the point(s) to reshape this area.</span>
+  <button id="editDetails">Edit details</button>
+  <button id="editDone">Done</button>
+  <button id="editCancel">Cancel</button>
+</div>
+
+<div id="sidepanel">
+  <div id="authSection">
+    <div id="authLoggedOut">
+      <button id="googleSignInBtn">🔐 Sign in with Google</button>
+    </div>
+    <div id="authLoggedIn">
+      <div id="authUserBlock">
+        <span id="authUserEmail"></span>
+        <span id="authRoleBadge"></span>
+      </div>
+      <button id="googleSignOutBtn">Sign out</button>
+    </div>
+    <div id="authStatusNote"></div>
+  </div>
+  <h3>Legend</h3>
+  <div id="legend">
+    <div class="leg-row"><span class="leg-swatch g4"></span> 4G — solid line</div>
+    <div class="leg-row"><span class="leg-swatch g5"></span> 5G — dashed</div>
+    <div class="leg-row"><span class="leg-swatch g5plus"></span> 5G+ — dotted</div>
+  </div>
+  <div id="filterSection">
+    <h3 style="padding:0;border:none;margin-bottom:2px;">Filter map</h3>
+    <label class="chk"><input type="checkbox" class="filterChk" data-type="4g" checked> 4G</label>
+    <label class="chk"><input type="checkbox" class="filterChk" data-type="5g" checked> 5G</label>
+    <label class="chk"><input type="checkbox" class="filterChk" data-type="5gplus" checked> 5G+</label>
+  </div>
+  <div id="savedAreasSection">
+    <h3>Towers</h3>
+    <div id="arealist"><div id="emptystate">No towers yet. Draw a polygon or a tower circle to add one.</div></div>
+  </div>
+</div>
+
+<div id="overlay">
+  <div id="modal">
+    <h2 id="modalTitle">Mark tower coverage</h2>
+    <label>Network type</label>
+    <div class="type-choice">
+      <button data-type="4g" class="sel">4G</button>
+      <button data-type="5g">5G</button>
+      <button data-type="5gplus">5G+</button>
+    </div>
+
+    <label>Voice service</label>
+    <div class="vo-row">
+      <label class="vo-choice" id="volteChoice"><input type="checkbox" id="volteInput"> VoLTE</label>
+      <label class="vo-choice" id="vonrChoice"><input type="checkbox" id="vonrInput"> VoNR</label>
+    </div>
+
+    <div id="shapeFields">
+      <label>Coverage shape</label>
+      <div class="preset-row" id="presetRow">
+        <button data-sweep="360" class="sel">Full circle</button>
+        <button data-sweep="180">Half</button>
+        <button data-sweep="90">Quarter</button>
+        <button data-sweep="custom">Custom</button>
+      </div>
+      <div class="two-col">
+        <div><label>Radius (meters)</label><input id="radiusInput" type="number" min="10" step="10" value="500"></div>
+        <div><label>Start angle (°)</label><input id="startAngleInput" type="number" min="0" max="359" step="5" value="0"></div>
+      </div>
+      <label>Arc width (°) — 360 = full circle</label>
+      <input id="sweepAngleInput" type="number" min="1" max="360" step="5" value="360">
+      <div class="field-hint">Angles are compass bearings from the tower: 0°=N, 90°=E, 180°=S, 270°=W.</div>
+    </div>
+
+    <label>Tower name / location</label>
+    <input id="towerNameInput" placeholder="e.g. Good Hope Tower" />
+    <label>Additional details (optional)</label>
+    <textarea id="noteInput" placeholder="e.g. Rooftop site, 3 sectors"></textarea>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="modalCancel">Cancel</button>
+      <button class="btn-save" id="modalSave">Save tower</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function(){
+  // ---------------- map setup ----------------
+  const map = L.map('map', { zoomControl:false, attributionControl:true }).setView([6.8013, -58.1551], 12);
+  L.control.zoom({position:'bottomright'}).addTo(map);
+
+  const BLANK_TILE = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+  const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Imagery &copy; Esri', maxZoom: 19, maxNativeZoom: 17, errorTileUrl: BLANK_TILE
+  }).addTo(map);
+  // Roads drawn as a separate line layer (not part of the photo), so they stay sharp even where the
+  // satellite photo itself is hazy or cloud-covered.
+  const roads = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19, maxNativeZoom: 17, opacity: 0.95, errorTileUrl: BLANK_TILE
+  }).addTo(map);
+  const labels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19, maxNativeZoom: 17, opacity: 0.9, errorTileUrl: BLANK_TILE
+  }).addTo(map); // always on regardless of zoom, so place/village names are visible before any coverage is drawn
+  // Plain street map with no photography at all — a fallback with zero cloud cover, useful when the
+  // satellite photo for an area is too obscured to be useful.
+  const streets = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png', {
+    attribution: '&copy; OpenStreetMap contributors', maxZoom: 19
+  });
+  L.control.layers({ 'Satellite': satellite, 'Streets (no clouds)': streets }, null, { position:'bottomleft', collapsed:true }).addTo(map);
+  satellite.on('add', ()=>{ if(!map.hasLayer(roads)) roads.addTo(map); });
+  satellite.on('remove', ()=>{ if(map.hasLayer(roads)) map.removeLayer(roads); });
+
+  document.getElementById('labelsToggle').addEventListener('change', e=>{
+    if(e.target.checked) labels.addTo(map); else map.removeLayer(labels);
+  });
+
+  // ---------------- meta / geometry helpers ----------------
+  const TYPE_META = { '4g':{label:'4G',dash:null}, '5g':{label:'5G',dash:'10,7'}, '5gplus':{label:'5G+',dash:'2,7'} };
+  const MARK_COLOR = '#f3f1ea';
+  const ZOOM_LABEL_MIN = 13;
+
+  function styleFor(type){
+    const meta = TYPE_META[type] || TYPE_META['4g'];
+    return { color: MARK_COLOR, weight: 2.5, opacity: 0.95, fillColor: MARK_COLOR, fillOpacity: 0.16, dashArray: meta.dash };
+  }
+  function areaLabel(area){ return area.towerName ? area.towerName : 'Unnamed tower'; }
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function voFlagsHtml(area, cls){
+    let html = '';
+    if(area.volte) html += `<span class="${cls}">VoLTE</span>`;
+    if(area.vonr) html += `<span class="${cls}">VoNR</span>`;
+    return html;
+  }
+
+  function destinationPoint(lat, lng, bearingDeg, distMeters){
+    const R = 6371000, brng = bearingDeg*Math.PI/180, lat1 = lat*Math.PI/180, lng1 = lng*Math.PI/180;
+    const lat2 = Math.asin(Math.sin(lat1)*Math.cos(distMeters/R) + Math.cos(lat1)*Math.sin(distMeters/R)*Math.cos(brng));
+    const lng2 = lng1 + Math.atan2(Math.sin(brng)*Math.sin(distMeters/R)*Math.cos(lat1), Math.cos(distMeters/R)-Math.sin(lat1)*Math.sin(lat2));
+    return [lat2*180/Math.PI, ((lng2*180/Math.PI)+540)%360-180];
+  }
+  function sectorPoints(center, radius, startAngle, sweepAngle){
+    sweepAngle = Math.max(1, Math.min(360, sweepAngle));
+    const steps = Math.max(8, Math.round(sweepAngle/6));
+    const pts = [];
+    const pie = sweepAngle < 359.9;
+    if(pie) pts.push(center);
+    for(let i=0;i<=steps;i++){
+      pts.push(destinationPoint(center[0], center[1], startAngle + (sweepAngle*i/steps), radius));
+    }
+    if(pie) pts.push(center);
+    return pts;
+  }
+  function getAreaCoords(area){
+    return area.shapeType === 'sector' ? sectorPoints(area.center, area.radius, area.startAngle, area.sweepAngle) : area.coords;
+  }
+  function pointInPolygon(latlng, coords){
+    let x = latlng.lng, y = latlng.lat, inside = false;
+    for(let i=0, j=coords.length-1; i<coords.length; j=i++){
+      const xi = coords[i][1], yi = coords[i][0], xj = coords[j][1], yj = coords[j][0];
+      const intersect = ((yi>y) !== (yj>y)) && (x < (xj-xi)*(y-yi)/((yj-yi)||1e-12)+xi);
+      if(intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  // ---------------- firebase (auth + firestore storage) ----------------
+  // Fill in firebaseConfig with the values from your Firebase project:
+  // Firebase Console → Project settings → General → "Your apps" → SDK setup and configuration.
+  // Reusing the same project/config as the original coverage map so the same admin account
+  // and Firestore project can be used — just make sure this page's URL is added to the
+  // Firebase Auth "Authorized domains" list too.
+  const firebaseConfig = {
+    apiKey: "AIzaSyC2_VzItT0OF_HR8NQoURuhHZb0AEERCkQ",
+    authDomain: "wazyoscoveragemap.firebaseapp.com",
+    projectId: "wazyoscoveragemap",
+    storageBucket: "wazyoscoveragemap.firebasestorage.app",
+    messagingSenderId: "67598572402",
+    appId: "1:67598572402:web:9375ab81a41771615c5beb",
+    measurementId: "G-ZSVEFLWTKG"
+  };
+  const ADMIN_EMAIL = 'waz.shakeer1@gmail.com'; // only this Google account can add/edit/remove towers
+  // Stored in its own doc so it never collides with data written by the original coverage map.
+  const AREAS_DOC_PATH = ['coverage', 'towerAreas']; // collection, doc
+
+  let db = null, auth = null, currentUser = null, isAdmin = false, firebaseOk = false;
+
+  function initFirebase(){
+    try{
+      if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+      auth = firebase.auth();
+      db = firebase.firestore();
+      firebaseOk = true;
+      auth.onAuthStateChanged(user=>{
+        currentUser = user;
+        isAdmin = !!(user && user.email === ADMIN_EMAIL);
+        updateAuthUI();
+      });
+    }catch(e){
+      console.error('Firebase init failed', e);
+      firebaseOk = false;
+      updateAuthUI();
+      showToast('Firebase isn\'t configured yet — running in read-only mode.');
+    }
+  }
+
+  function updateAuthUI(){
+    const loggedOut = document.getElementById('authLoggedOut');
+    const loggedIn = document.getElementById('authLoggedIn');
+    const emailEl = document.getElementById('authUserEmail');
+    const badge = document.getElementById('authRoleBadge');
+    const note = document.getElementById('authStatusNote');
+
+    if(!firebaseOk){
+      loggedOut.style.display = 'flex'; loggedIn.style.display = 'none';
+      document.getElementById('googleSignInBtn').disabled = true;
+      note.textContent = 'Firebase config missing — see setup instructions.';
+    } else if(currentUser){
+      loggedOut.style.display = 'none'; loggedIn.style.display = 'flex';
+      emailEl.textContent = currentUser.email;
+      badge.textContent = isAdmin ? 'Admin — editing enabled' : 'Signed in — view only';
+      badge.className = isAdmin ? 'admin' : 'viewer';
+      note.textContent = isAdmin ? '' : 'This Google account is not the map owner, so editing is disabled.';
+    } else {
+      loggedOut.style.display = 'flex'; loggedIn.style.display = 'none';
+      document.getElementById('googleSignInBtn').disabled = false;
+      note.textContent = '';
+    }
+    applyEditPermissions();
+  }
+
+  function applyEditPermissions(){
+    ['drawBtn','towerBtn','undoBtn','redoBtn'].forEach(id=>{
+      document.getElementById(id).style.display = isAdmin ? '' : 'none';
+    });
+    document.querySelectorAll('#toolbar .sep').forEach(s=> s.style.display = isAdmin ? '' : 'none');
+    document.getElementById('savedAreasSection').style.display = isAdmin ? '' : 'none';
+    renderList();
+  }
+
+  document.getElementById('googleSignInBtn').addEventListener('click', ()=>{
+    if(!firebaseOk){ showToast('Firebase isn\'t configured yet.'); return; }
+    const provider = new firebase.auth.GoogleAuthProvider();
+    auth.signInWithPopup(provider).catch(err=>{ showToast('Sign-in failed: ' + err.message); });
+  });
+  document.getElementById('googleSignOutBtn').addEventListener('click', ()=>{
+    if(auth) auth.signOut();
+  });
+
+  // ---------------- storage (Firestore) ----------------
+  let areas = [];
+  const layerById = {};
+
+  function areasDocRef(){ return db.collection(AREAS_DOC_PATH[0]).doc(AREAS_DOC_PATH[1]); }
+
+  function loadAreas(){
+    if(!firebaseOk){ areas = []; rebuildAllLayers(); return; }
+    areasDocRef().onSnapshot(snap=>{
+      const data = snap.exists ? snap.data() : null;
+      try{
+        if(data && typeof data.areasJson === 'string'){ areas = JSON.parse(data.areasJson); }
+        else if(data && Array.isArray(data.areas)){ areas = data.areas; } // legacy doc shape
+        else { areas = []; }
+      }catch(e){ console.error('Failed to parse coverage data', e); areas = []; }
+      rebuildAllLayers();
+    }, err=>{
+      console.error(err);
+      showToast('Could not load coverage data from Firestore.');
+    });
+  }
+  async function persist(){
+    if(!firebaseOk){ showToast('Firebase isn\'t configured — change not saved.'); return false; }
+    try{
+      // Firestore rejects arrays nested inside arrays (polygon coordinate lists are exactly that),
+      // so the whole areas list is stored as a JSON string instead of raw nested arrays.
+      await areasDocRef().set({ areasJson: JSON.stringify(areas), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      return true;
+    }
+    catch(e){
+      console.error('Firestore save failed:', e);
+      showToast('SAVE FAILED: ' + (e.code || e.message || 'unknown error') + ' — check console (F12)');
+      return false;
+    }
+  }
+  function showToast(msg){
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.style.display='block';
+    clearTimeout(t._h); t._h = setTimeout(()=>{ t.style.display='none'; }, 2600);
+  }
+
+  // ---------------- undo / redo ----------------
+  let undoStack = [], redoStack = [];
+  let editHistory = [], editRedoHistory = []; // per-edit-session history (vertex drags / inserts while reshaping)
+  function snapshot(){ return JSON.parse(JSON.stringify(areas)); }
+  function shapeSnapshot(area){ return JSON.parse(JSON.stringify({ coords:area.coords, center:area.center, radius:area.radius, startAngle:area.startAngle, sweepAngle:area.sweepAngle })); }
+  function pushUndo(){ undoStack.push(snapshot()); if(undoStack.length>50) undoStack.shift(); redoStack=[]; updateUndoRedoButtons(); }
+  function pushEditHistory(area){
+    if(!editingId) return;
+    editHistory.push(shapeSnapshot(area));
+    if(editHistory.length>50) editHistory.shift();
+    editRedoHistory = [];
+    updateUndoRedoButtons();
+  }
+  function updateUndoRedoButtons(){
+    const drawingHasPoints = activeDrawMode==='polygon' && points.length>0;
+    const editUndo = !!editingId && editHistory.length>0;
+    const editRedo = !!editingId && editRedoHistory.length>0;
+    document.getElementById('undoBtn').disabled = !(undoStack.length || drawingHasPoints || editUndo);
+    document.getElementById('redoBtn').disabled = !(redoStack.length || editRedo);
+  }
+  async function undo(){
+    if(!isAdmin) return;
+    if(editingId){
+      if(!editHistory.length) return;
+      const area = areas.find(a=>a.id===editingId), entry = layerById[editingId];
+      if(!area || !entry) return;
+      editRedoHistory.push(shapeSnapshot(area));
+      const prev = editHistory.pop();
+      Object.assign(area, prev);
+      entry.polygon.setLatLngs(getAreaCoords(area));
+      if(area.shapeType === 'sector') buildEditMarkersForSector(area, entry); else buildEditMarkersForPolygon(area, entry);
+      updateUndoRedoButtons();
+      return;
+    }
+    if(activeDrawMode==='polygon' && points.length>0){ undoLastPoint(); return; }
+    if(!undoStack.length) return;
+    redoStack.push(snapshot()); areas = undoStack.pop();
+    rebuildAllLayers(); await persist(); updateUndoRedoButtons();
+  }
+  async function redo(){
+    if(!isAdmin) return;
+    if(editingId){
+      if(!editRedoHistory.length) return;
+      const area = areas.find(a=>a.id===editingId), entry = layerById[editingId];
+      if(!area || !entry) return;
+      editHistory.push(shapeSnapshot(area));
+      const next = editRedoHistory.pop();
+      Object.assign(area, next);
+      entry.polygon.setLatLngs(getAreaCoords(area));
+      if(area.shapeType === 'sector') buildEditMarkersForSector(area, entry); else buildEditMarkersForPolygon(area, entry);
+      updateUndoRedoButtons();
+      return;
+    }
+    if(!redoStack.length) return;
+    undoStack.push(snapshot()); areas = redoStack.pop();
+    rebuildAllLayers(); await persist(); updateUndoRedoButtons();
+  }
+  document.getElementById('undoBtn').addEventListener('click', undo);
+  document.getElementById('redoBtn').addEventListener('click', redo);
+  document.addEventListener('keydown', (e)=>{
+    if(!(e.ctrlKey || e.metaKey)) return;
+    if(e.key.toLowerCase()==='z' && !e.shiftKey){ e.preventDefault(); undo(); }
+    else if(e.key.toLowerCase()==='y' || (e.key.toLowerCase()==='z' && e.shiftKey)){ e.preventDefault(); redo(); }
+  });
+
+  // ---------------- render / interact with areas ----------------
+  let activeFilters = new Set(['4g','5g','5gplus']);
+  function applyFilters(){
+    areas.forEach(area=>{
+      const entry = layerById[area.id];
+      if(!entry) return;
+      const visible = activeFilters.has(area.type);
+      if(visible){ if(!map.hasLayer(entry.polygon)) entry.polygon.addTo(map); }
+      else if(map.hasLayer(entry.polygon)) map.removeLayer(entry.polygon);
+    });
+  }
+  document.querySelectorAll('.filterChk').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      const type = cb.dataset.type;
+      if(cb.checked) activeFilters.add(type); else activeFilters.delete(type);
+      applyFilters();
+    });
+  });
+
+  function rebuildAllLayers(){
+    Object.values(layerById).forEach(entry => map.removeLayer(entry.polygon));
+    for(const k in layerById) delete layerById[k];
+    areas.forEach(renderArea);
+    applyFilters();
+    renderList();
+    applyZoomLabelVisibility();
+  }
+
+  function renderArea(area){
+    const poly = L.polygon(getAreaCoords(area), styleFor(area.type)).addTo(map);
+    poly.bindTooltip(areaLabel(area), { permanent:true, direction:'center', className:'cov-tooltip' });
+    poly.on('click', (e)=>{ L.DomEvent.stopPropagation(e); handleAreaClick(e.latlng); });
+    layerById[area.id] = { polygon: poly };
+  }
+
+  function dedupeMatches(matches){
+    const seen = new Map();
+    matches.forEach(a=>{
+      const key = a.type + '|' + (a.towerName||'') + '|' + (a.volte?1:0) + '|' + (a.vonr?1:0) + '|' + (a.note||'');
+      if(!seen.has(key)) seen.set(key, a);
+    });
+    return Array.from(seen.values());
+  }
+
+  function handleAreaClick(latlng){
+    const rawMatches = areas.filter(a => activeFilters.has(a.type) && pointInPolygon(latlng, getAreaCoords(a)));
+    const matches = dedupeMatches(rawMatches);
+    if(matches.length <= 1){
+      openDetailPopup(matches[0] || areas[0], latlng);
+    } else {
+      openChooserPopup(matches, latlng);
+    }
+  }
+
+  function buildPopupHtml(area){
+    const meta = TYPE_META[area.type] || TYPE_META['4g'];
+    const voHtml = voFlagsHtml(area, 'pop-voflag');
+    return `<div class="pop-title">${meta.label} — ${escapeHtml(areaLabel(area))}</div>
+       ${voHtml ? `<div class="pop-voflags">${voHtml}</div>` : ''}
+       ${area.note ? `<div class="pop-note">${escapeHtml(area.note)}</div>` : ''}
+       ${isAdmin ? `<div class="pop-actions">
+         <button class="pop-edit" data-id="${area.id}">Edit shape</button>
+         <button class="pop-del" data-id="${area.id}">Remove</button>
+       </div>` : ''}`;
+  }
+
+  function openDetailPopup(area, latlng){
+    if(!area) return;
+    const popup = L.popup({ maxWidth:280 }).setLatLng(latlng).setContent(buildPopupHtml(area)).openOn(map);
+    const editBtn = document.querySelector(`.pop-edit[data-id="${area.id}"]`);
+    const delBtn = document.querySelector(`.pop-del[data-id="${area.id}"]`);
+    if(editBtn) editBtn.addEventListener('click', ()=>{ map.closePopup(); startEditArea(area.id); });
+    if(delBtn) delBtn.addEventListener('click', ()=> removeArea(area.id));
+  }
+
+  function openChooserPopup(matches, latlng){
+    let html = `<div class="choose-title">${matches.length} coverage areas overlap here — choose one</div>`;
+    matches.forEach(a=>{
+      const meta = TYPE_META[a.type] || TYPE_META['4g'];
+      html += `<div class="choose-row" data-id="${a.id}"><span>${escapeHtml(areaLabel(a))}</span><span class="badge" style="border:1px solid var(--mark);border-radius:20px;padding:1px 7px;font-size:10px;color:var(--mark);">${meta.label}</span></div>`;
+    });
+    const popup = L.popup({ maxWidth:280 }).setLatLng(latlng).setContent(html).openOn(map);
+    matches.forEach(a=>{
+      const row = document.querySelector(`.choose-row[data-id="${a.id}"]`);
+      if(row) row.addEventListener('click', ()=> openDetailPopup(a, latlng));
+    });
+  }
+
+  async function removeArea(id){
+    if(!isAdmin){ showToast('Sign in as the map owner to remove towers.'); return; }
+    pushUndo();
+    const entry = layerById[id];
+    if(entry){ map.removeLayer(entry.polygon); delete layerById[id]; }
+    areas = areas.filter(a => a.id !== id);
+    await persist(); renderList();
+    showToast('Tower removed.');
+  }
+
+  function renderList(){
+    const list = document.getElementById('arealist');
+    if(!areas.length){ list.innerHTML = '<div id="emptystate">No towers yet. Draw a polygon or a tower circle to add one.</div>'; return; }
+    list.innerHTML = '';
+    areas.forEach(area=>{
+      const meta = TYPE_META[area.type] || TYPE_META['4g'];
+      const voHtml = voFlagsHtml(area, 'voflag');
+      const card = document.createElement('div');
+      card.className = 'area-card';
+      card.innerHTML = `
+        <div class="row1"><span>${escapeHtml(areaLabel(area))}</span><span class="badge">${meta.label}</span></div>
+        <div class="sub">${area.shapeType==='sector' ? 'Tower circle' : 'Polygon area'}</div>
+        ${voHtml ? `<div class="voflags">${voHtml}</div>` : ''}
+        ${area.note ? `<div class="note">${escapeHtml(area.note)}</div>` : ''}
+        ${isAdmin ? `<div class="actions"><button class="edit">Edit shape</button><button class="del">Remove</button></div>` : ''}`;
+      card.addEventListener('click', (e)=>{
+        if(e.target.classList.contains('del') || e.target.classList.contains('edit')) return;
+        const entry = layerById[area.id];
+        if(entry){ map.fitBounds(entry.polygon.getBounds(), {maxZoom:16}); openDetailPopup(area, entry.polygon.getBounds().getCenter()); }
+      });
+      const delBtn = card.querySelector('.del'); if(delBtn) delBtn.addEventListener('click', (e)=>{ e.stopPropagation(); removeArea(area.id); });
+      const editBtn = card.querySelector('.edit'); if(editBtn) editBtn.addEventListener('click', (e)=>{ e.stopPropagation(); startEditArea(area.id); });
+      list.appendChild(card);
+    });
+  }
+
+  function applyZoomLabelVisibility(){
+    const show = map.getZoom() >= ZOOM_LABEL_MIN;
+    Object.values(layerById).forEach(entry=>{ if(show) entry.polygon.openTooltip(); else entry.polygon.closeTooltip(); });
+  }
+  map.on('zoomend', applyZoomLabelVisibility);
+
+  function makeVertexMarker(latlng, isFirst, onMove, isTower){
+    const cls = 'vertex-marker' + (isFirst?' vertex-first':'') + (isTower?' tower-marker':'');
+    const icon = L.divIcon({ className: cls, iconSize:[isTower?18:14, isTower?18:14], iconAnchor:[isTower?9:7, isTower?9:7] });
+    const m = L.marker(latlng, { icon, draggable:true }).addTo(map);
+    m.on('drag', ()=> onMove(m.getLatLng()));
+    m.on('dragend', ()=> onMove(m.getLatLng()));
+    return m;
+  }
+
+  // ---------------- shared draw-mode state ----------------
+  let activeDrawMode = null; // null | 'polygon' | 'circle'
+  let mouseDownPoint = null;
+  let suppressEmptyClick = false; // avoids the "no coverage" message firing right after placing a draw point
+
+  map.on('mousedown', (e)=>{ if(activeDrawMode) mouseDownPoint = e.containerPoint; });
+  map.on('mouseup', (e)=>{
+    if(!activeDrawMode || !mouseDownPoint) return;
+    const dist = mouseDownPoint.distanceTo(e.containerPoint);
+    mouseDownPoint = null;
+    if(dist > 6) return; // was a pan, not a click
+    suppressEmptyClick = true;
+    if(activeDrawMode === 'polygon') handlePlacePoint(e.latlng);
+    else if(activeDrawMode === 'circle') handlePlaceCenter(e.latlng);
+  });
+  // Fires only when the click didn't land on a coverage-area polygon (those call stopPropagation themselves).
+  map.on('click', ()=>{
+    if(suppressEmptyClick){ suppressEmptyClick = false; return; }
+    if(activeDrawMode || editingId) return;
+    showToast('No tower coverage in this area');
+  });
+
+  // ================= POLYGON DRAWING =================
+  let points = [], vertexMarkers = [], tempLine = null, tempPoly = null;
+  const drawBtn = document.getElementById('drawBtn');
+  const banner = document.getElementById('drawbanner');
+
+  drawBtn.addEventListener('click', ()=>{
+    if(!isAdmin){ showToast('Sign in as the map owner to draw coverage areas.'); return; }
+    if(editingId) cancelEdit();
+    if(activeDrawMode==='circle') cancelCircleDrawing();
+    if(activeDrawMode==='polygon') cancelDrawing(); else startDrawing();
+  });
+  document.getElementById('cancelDraw').addEventListener('click', cancelDrawing);
+
+  function startDrawing(){
+    activeDrawMode = 'polygon'; points = []; vertexMarkers = [];
+    drawBtn.textContent = '✕ Cancel drawing'; drawBtn.classList.add('active'); drawBtn.classList.remove('primary');
+    banner.style.display = 'flex'; map.getContainer().style.cursor = 'crosshair';
+    updateUndoRedoButtons();
+  }
+  function cancelDrawing(){
+    activeDrawMode = null; points = [];
+    vertexMarkers.forEach(m => map.removeLayer(m)); vertexMarkers = [];
+    if(tempLine){ map.removeLayer(tempLine); tempLine = null; }
+    if(tempPoly){ map.removeLayer(tempPoly); tempPoly = null; }
+    drawBtn.textContent = '✏️ Draw polygon'; drawBtn.classList.remove('active'); drawBtn.classList.add('primary');
+    banner.style.display = 'none'; map.getContainer().style.cursor = '';
+    updateUndoRedoButtons();
+  }
+  function undoLastPoint(){
+    if(!points.length) return;
+    points.pop(); const m = vertexMarkers.pop(); if(m) map.removeLayer(m);
+    redrawTemp(); updateUndoRedoButtons();
+  }
+  function redrawTemp(){
+    if(tempLine) map.removeLayer(tempLine);
+    if(tempPoly) map.removeLayer(tempPoly);
+    tempLine = tempPoly = null;
+    if(points.length >= 2) tempLine = L.polyline(points, {color:MARK_COLOR, weight:2, dashArray:'4,4'}).addTo(map);
+    if(points.length >= 3) tempPoly = L.polygon(points, {color:MARK_COLOR, weight:1, fillColor:MARK_COLOR, fillOpacity:0.1, dashArray:'4,4'}).addTo(map);
+  }
+  function handlePlacePoint(latlng){
+    if(points.length >= 3){
+      const p0 = map.latLngToContainerPoint(points[0]), pc = map.latLngToContainerPoint(latlng);
+      if(p0.distanceTo(pc) < 14){ finishDrawing(); return; }
+    }
+    const idx = points.length;
+    points.push(latlng);
+    vertexMarkers.push(makeVertexMarker(latlng, idx===0, (nl)=>{ points[idx]=nl; redrawTemp(); }));
+    redrawTemp(); updateUndoRedoButtons();
+  }
+  let pendingCoords = null;
+  function finishDrawing(){
+    if(points.length < 3){ showToast('Add at least 3 points to make an area.'); return; }
+    pendingCoords = points.map(p => [p.lat, p.lng]);
+    vertexMarkers.forEach(m => map.removeLayer(m)); vertexMarkers = [];
+    if(tempLine){ map.removeLayer(tempLine); tempLine=null; }
+    if(tempPoly){ map.removeLayer(tempPoly); tempPoly=null; }
+    activeDrawMode = null; points = [];
+    drawBtn.textContent = '✏️ Draw polygon'; drawBtn.classList.remove('active'); drawBtn.classList.add('primary');
+    banner.style.display = 'none'; map.getContainer().style.cursor = '';
+    updateUndoRedoButtons();
+    openModal('create-polygon');
+  }
+
+  // ================= CIRCLE / TOWER DRAWING =================
+  const towerBtn = document.getElementById('towerBtn');
+  const towerbanner = document.getElementById('towerbanner');
+  const towerText = document.getElementById('towerText');
+  const towerConfirm = document.getElementById('towerConfirm');
+  let towerCenterMarker = null;
+
+  towerBtn.addEventListener('click', ()=>{
+    if(!isAdmin){ showToast('Sign in as the map owner to draw tower coverage.'); return; }
+    if(editingId) cancelEdit();
+    if(activeDrawMode==='polygon') cancelDrawing();
+    if(activeDrawMode==='circle') cancelCircleDrawing(); else startCircleDrawing();
+  });
+  document.getElementById('towerCancel').addEventListener('click', cancelCircleDrawing);
+  towerConfirm.addEventListener('click', confirmCircleCenter);
+
+  function startCircleDrawing(){
+    activeDrawMode = 'circle';
+    towerBtn.textContent = '✕ Cancel'; towerBtn.classList.add('active'); towerBtn.classList.remove('primary');
+    towerText.textContent = 'Click the map to place the tower location.';
+    towerConfirm.disabled = true;
+    towerbanner.style.display = 'flex'; map.getContainer().style.cursor = 'crosshair';
+  }
+  function cancelCircleDrawing(){
+    activeDrawMode = null;
+    if(towerCenterMarker){ map.removeLayer(towerCenterMarker); towerCenterMarker = null; }
+    towerBtn.textContent = '📡 Draw tower circle'; towerBtn.classList.remove('active'); towerBtn.classList.add('primary');
+    towerbanner.style.display = 'none'; map.getContainer().style.cursor = '';
+  }
+  function handlePlaceCenter(latlng){
+    if(towerCenterMarker) return; // already placed — drag it or confirm
+    towerCenterMarker = makeVertexMarker(latlng, false, ()=>{}, true);
+    towerText.textContent = 'Drag the marker to fine-tune the tower position, then confirm.';
+    towerConfirm.disabled = false;
+  }
+  function confirmCircleCenter(){
+    if(!towerCenterMarker) return;
+    const c = towerCenterMarker.getLatLng();
+    towerbanner.style.display = 'none';
+    towerBtn.textContent = '📡 Draw tower circle'; towerBtn.classList.remove('active'); towerBtn.classList.add('primary');
+    activeDrawMode = null;
+    openModal('create-sector', { center: [c.lat, c.lng] });
+  }
+
+  document.addEventListener('keydown', (e)=>{
+    if(activeDrawMode==='polygon'){
+      if(e.key==='Escape') cancelDrawing();
+      if(e.key==='Enter' && points.length>=3) finishDrawing();
+    } else if(activeDrawMode==='circle'){
+      if(e.key==='Escape') cancelCircleDrawing();
+      if(e.key==='Enter' && towerCenterMarker) confirmCircleCenter();
+    }
+  });
+
+  // ================= EDIT EXISTING AREA =================
+  let editingId = null, editMarkers = [], editOriginalState = null;
+  const editbar = document.getElementById('editbar');
+
+  function startEditArea(id){
+    if(!isAdmin){ showToast('Sign in as the map owner to edit towers.'); return; }
+    if(activeDrawMode==='polygon') cancelDrawing();
+    if(activeDrawMode==='circle') cancelCircleDrawing();
+    if(editingId) cancelEdit();
+    const area = areas.find(a => a.id===id), entry = layerById[id];
+    if(!area || !entry) return;
+    editingId = id;
+    editHistory = []; editRedoHistory = [];
+    editOriginalState = { coords: area.coords ? area.coords.map(c=>c.slice()) : null,
+      center: area.center ? area.center.slice() : null, radius: area.radius, startAngle: area.startAngle, sweepAngle: area.sweepAngle };
+    entry.polygon.closeTooltip();
+    if(area.shapeType === 'sector'){
+      buildEditMarkersForSector(area, entry);
+      document.querySelector('#editbar span').textContent = 'Drag the tower marker to move this coverage circle.';
+    } else {
+      buildEditMarkersForPolygon(area, entry);
+      document.querySelector('#editbar span').textContent = 'Drag a point to reshape. Click a small dot on an edge to add a new point.';
+    }
+    editbar.style.display = 'flex';
+    updateUndoRedoButtons();
+  }
+  function buildEditMarkersForSector(area, entry){
+    editMarkers.forEach(m => map.removeLayer(m)); editMarkers = [];
+    const vm = makeVertexMarker(L.latLng(area.center[0], area.center[1]), false, (nl)=>{
+      area.center = [nl.lat, nl.lng]; entry.polygon.setLatLngs(getAreaCoords(area));
+    }, true);
+    vm.on('dragstart', ()=> pushEditHistory(area));
+    editMarkers.push(vm);
+  }
+  function buildEditMarkersForPolygon(area, entry){
+    editMarkers.forEach(m => map.removeLayer(m)); editMarkers = [];
+    const n = area.coords.length;
+    for(let i=0;i<n;i++){
+      const c = area.coords[i];
+      const vm = makeVertexMarker(L.latLng(c[0], c[1]), i===0, (nl)=>{
+        area.coords[i] = [nl.lat, nl.lng]; entry.polygon.setLatLngs(getAreaCoords(area));
+      });
+      vm.on('dragstart', ()=> pushEditHistory(area));
+      vm.on('dragend', ()=> buildEditMarkersForPolygon(area, entry)); // reposition the edge midpoints around the moved vertex
+      editMarkers.push(vm);
+    }
+    for(let i=0;i<n;i++){
+      const c1 = area.coords[i], c2 = area.coords[(i+1)%n];
+      const midLatLng = L.latLng((c1[0]+c2[0])/2, (c1[1]+c2[1])/2);
+      editMarkers.push(makeMidpointMarker(midLatLng, i, area, entry));
+    }
+  }
+  function makeMidpointMarker(latlng, insertAfterIndex, area, entry){
+    const icon = L.divIcon({ className:'vertex-marker vertex-mid', iconSize:[10,10], iconAnchor:[5,5] });
+    const m = L.marker(latlng, { icon, draggable:false }).addTo(map);
+    m.on('click', (e)=>{
+      L.DomEvent.stopPropagation(e);
+      pushEditHistory(area);
+      area.coords.splice(insertAfterIndex+1, 0, [latlng.lat, latlng.lng]);
+      entry.polygon.setLatLngs(getAreaCoords(area));
+      buildEditMarkersForPolygon(area, entry);
+      showToast('Point added — drag it to adjust.');
+    });
+    return m;
+  }
+  function stopEditUI(){ editMarkers.forEach(m => map.removeLayer(m)); editMarkers = []; editbar.style.display = 'none'; editHistory = []; editRedoHistory = []; updateUndoRedoButtons(); }
+  async function finishEdit(){
+    if(!editingId) return;
+    const area = areas.find(a => a.id===editingId), entry = layerById[editingId];
+    stopEditUI();
+    if(area && entry){
+      pushUndo();
+      undoStack[undoStack.length-1] = (function(){
+        const snap = JSON.parse(JSON.stringify(areas));
+        const target = snap.find(a => a.id===editingId);
+        if(target && editOriginalState){
+          if(editOriginalState.coords) target.coords = editOriginalState.coords;
+          if(editOriginalState.center) target.center = editOriginalState.center;
+          if(editOriginalState.radius!==undefined) target.radius = editOriginalState.radius;
+          if(editOriginalState.startAngle!==undefined) target.startAngle = editOriginalState.startAngle;
+          if(editOriginalState.sweepAngle!==undefined) target.sweepAngle = editOriginalState.sweepAngle;
+        }
+        return snap;
+      })();
+      entry.polygon.bindTooltip(areaLabel(area), { permanent:true, direction:'center', className:'cov-tooltip' });
+      applyZoomLabelVisibility();
+      await persist(); renderList();
+      showToast('Shape updated.');
+    }
+    editingId = null; editOriginalState = null;
+  }
+  function cancelEdit(){
+    if(!editingId) return;
+    const area = areas.find(a => a.id===editingId), entry = layerById[editingId];
+    if(area && entry && editOriginalState){
+      if(editOriginalState.coords) area.coords = editOriginalState.coords;
+      if(editOriginalState.center) area.center = editOriginalState.center;
+      if(editOriginalState.radius!==undefined) area.radius = editOriginalState.radius;
+      if(editOriginalState.startAngle!==undefined) area.startAngle = editOriginalState.startAngle;
+      if(editOriginalState.sweepAngle!==undefined) area.sweepAngle = editOriginalState.sweepAngle;
+      entry.polygon.setLatLngs(getAreaCoords(area));
+      entry.polygon.bindTooltip(areaLabel(area), { permanent:true, direction:'center', className:'cov-tooltip' });
+      applyZoomLabelVisibility();
+    }
+    stopEditUI(); editingId = null; editOriginalState = null;
+  }
+  document.getElementById('editDone').addEventListener('click', finishEdit);
+  document.getElementById('editCancel').addEventListener('click', cancelEdit);
+  document.getElementById('editDetails').addEventListener('click', ()=>{
+    if(!editingId) return;
+    openModal('edit-details', { editingArea: areas.find(a=>a.id===editingId) });
+  });
+
+  // ================= MODAL (create polygon / create sector / edit details) =================
+  const overlay = document.getElementById('overlay');
+  const modalTitle = document.getElementById('modalTitle');
+  const shapeFields = document.getElementById('shapeFields');
+  const towerNameInput = document.getElementById('towerNameInput');
+  const noteInput = document.getElementById('noteInput');
+  const radiusInput = document.getElementById('radiusInput');
+  const startAngleInput = document.getElementById('startAngleInput');
+  const sweepAngleInput = document.getElementById('sweepAngleInput');
+  const presetRow = document.getElementById('presetRow');
+  const volteInput = document.getElementById('volteInput');
+  const vonrInput = document.getElementById('vonrInput');
+  const volteChoice = document.getElementById('volteChoice');
+  const vonrChoice = document.getElementById('vonrChoice');
+  let selectedType = '4g';
+  let modalCtx = { mode:null, pendingCenter:null, editingArea:null, previewLayer:null };
+
+  document.querySelectorAll('.type-choice button').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.type-choice button').forEach(b=>b.classList.remove('sel'));
+      btn.classList.add('sel'); selectedType = btn.dataset.type;
+    });
+  });
+  function syncVoChoiceStyle(){
+    volteChoice.classList.toggle('on', volteInput.checked);
+    vonrChoice.classList.toggle('on', vonrInput.checked);
+  }
+  volteInput.addEventListener('change', syncVoChoiceStyle);
+  vonrInput.addEventListener('change', syncVoChoiceStyle);
+  presetRow.querySelectorAll('button').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      presetRow.querySelectorAll('button').forEach(b=>b.classList.remove('sel'));
+      btn.classList.add('sel');
+      if(btn.dataset.sweep !== 'custom'){ sweepAngleInput.value = btn.dataset.sweep; refreshShapePreview(); }
+    });
+  });
+  [radiusInput, startAngleInput, sweepAngleInput].forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      presetRow.querySelectorAll('button').forEach(b=>b.classList.remove('sel'));
+      const match = presetRow.querySelector(`button[data-sweep="${sweepAngleInput.value}"]`);
+      if(match) match.classList.add('sel'); else presetRow.querySelector('button[data-sweep="custom"]').classList.add('sel');
+      refreshShapePreview();
+    });
+  });
+
+  function currentShapeCenter(){
+    if(modalCtx.mode === 'create-sector') return modalCtx.pendingCenter;
+    if(modalCtx.mode === 'edit-details' && modalCtx.editingArea && modalCtx.editingArea.shapeType==='sector') return modalCtx.editingArea.center;
+    return null;
+  }
+  function refreshShapePreview(){
+    const center = currentShapeCenter();
+    if(!center) return;
+    const coords = sectorPoints(center, Number(radiusInput.value)||500, Number(startAngleInput.value)||0, Number(sweepAngleInput.value)||360);
+    if(modalCtx.mode === 'edit-details'){
+      const entry = layerById[modalCtx.editingArea.id];
+      if(entry) entry.polygon.setLatLngs(coords);
+    } else {
+      if(!modalCtx.previewLayer){
+        modalCtx.previewLayer = L.polygon(coords, {color:MARK_COLOR, weight:2, fillColor:MARK_COLOR, fillOpacity:0.12, dashArray:'6,5'}).addTo(map);
+      } else {
+        modalCtx.previewLayer.setLatLngs(coords);
+      }
+    }
+  }
+
+  function openModal(mode, extra){
+    const modalEl = document.getElementById('modal');
+    modalEl.classList.remove('dragged');
+    modalEl.style.left = ''; modalEl.style.top = '';
+    extra = extra || {};
+    modalCtx = { mode, pendingCenter: extra.center || null, editingArea: extra.editingArea || null, previewLayer: null };
+    const isSector = mode === 'create-sector' || (mode==='edit-details' && modalCtx.editingArea && modalCtx.editingArea.shapeType==='sector');
+    shapeFields.style.display = isSector ? 'block' : 'none';
+    modalTitle.textContent = mode === 'edit-details' ? 'Edit tower details' : (mode==='create-sector' ? 'Set up tower coverage' : 'Mark tower coverage');
+
+    if(mode === 'edit-details'){
+      const a = modalCtx.editingArea;
+      selectedType = a.type;
+      document.querySelectorAll('.type-choice button').forEach(b=>b.classList.toggle('sel', b.dataset.type===a.type));
+      towerNameInput.value = a.towerName || '';
+      noteInput.value = a.note || '';
+      volteInput.checked = !!a.volte; vonrInput.checked = !!a.vonr; syncVoChoiceStyle();
+      if(isSector){
+        radiusInput.value = a.radius; startAngleInput.value = a.startAngle; sweepAngleInput.value = a.sweepAngle;
+        presetRow.querySelectorAll('button').forEach(b=>b.classList.remove('sel'));
+        const match = presetRow.querySelector(`button[data-sweep="${a.sweepAngle}"]`);
+        (match || presetRow.querySelector('button[data-sweep="custom"]')).classList.add('sel');
+      }
+    } else {
+      selectedType = '4g';
+      document.querySelectorAll('.type-choice button').forEach(b=>b.classList.toggle('sel', b.dataset.type==='4g'));
+      towerNameInput.value = ''; noteInput.value = '';
+      volteInput.checked = false; vonrInput.checked = false; syncVoChoiceStyle();
+      radiusInput.value = 500; startAngleInput.value = 0; sweepAngleInput.value = 360;
+      presetRow.querySelectorAll('button').forEach(b=>b.classList.toggle('sel', b.dataset.sweep==='360'));
+      if(mode === 'create-sector') refreshShapePreview();
+    }
+    overlay.style.display = 'flex';
+    setTimeout(()=>towerNameInput.focus(), 50);
+  }
+
+  function makeModalDraggable(){
+    const modalEl = document.getElementById('modal');
+    const handle = modalTitle;
+    let dragging = false, offX = 0, offY = 0;
+
+    function onDown(e){
+      const p = e.touches ? e.touches[0] : e;
+      const rect = modalEl.getBoundingClientRect();
+      // switch from flex-centered to fixed positioning at its current spot
+      modalEl.classList.add('dragged');
+      modalEl.style.left = rect.left + 'px';
+      modalEl.style.top = rect.top + 'px';
+      dragging = true;
+      offX = p.clientX - rect.left; offY = p.clientY - rect.top;
+      e.preventDefault();
+    }
+    function onMove(e){
+      if(!dragging) return;
+      const p = e.touches ? e.touches[0] : e;
+      const rect = modalEl.getBoundingClientRect();
+      let x = p.clientX - offX, y = p.clientY - offY;
+      x = Math.max(4, Math.min(window.innerWidth - rect.width - 4, x));
+      y = Math.max(4, Math.min(window.innerHeight - rect.height - 4, y));
+      modalEl.style.left = x + 'px'; modalEl.style.top = y + 'px';
+    }
+    function onUp(){ dragging = false; }
+
+    handle.addEventListener('mousedown', onDown);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    handle.addEventListener('touchstart', onDown, { passive:false });
+    document.addEventListener('touchmove', onMove, { passive:false });
+    document.addEventListener('touchend', onUp);
+  }
+
+  function closeModal(){
+    if(modalCtx.previewLayer){ map.removeLayer(modalCtx.previewLayer); }
+    if(modalCtx.mode === 'create-sector' && towerCenterMarker){ map.removeLayer(towerCenterMarker); towerCenterMarker = null; }
+    overlay.style.display = 'none'; pendingCoords = null;
+    modalCtx = { mode:null, pendingCenter:null, editingArea:null, previewLayer:null };
+  }
+  document.getElementById('modalCancel').addEventListener('click', closeModal);
+
+  document.getElementById('modalSave').addEventListener('click', async ()=>{
+    if(!isAdmin){ showToast('Sign in as the map owner to save changes.'); closeModal(); return; }
+    const towerName = towerNameInput.value.trim();
+    const note = noteInput.value.trim();
+    const volte = volteInput.checked, vonr = vonrInput.checked;
+
+    if(modalCtx.mode === 'create-polygon'){
+      if(!pendingCoords) return;
+      pushUndo();
+      const area = { id:'a_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), shapeType:'polygon',
+        type:selectedType, towerName, volte, vonr, note, coords: pendingCoords };
+      areas.push(area); renderArea(area); applyFilters(); renderList(); applyZoomLabelVisibility();
+      const ok = await persist(); closeModal(); if(ok) showToast('Tower coverage saved.');
+
+    } else if(modalCtx.mode === 'create-sector'){
+      if(!modalCtx.pendingCenter) return;
+      pushUndo();
+      const area = { id:'a_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), shapeType:'sector',
+        type:selectedType, towerName, volte, vonr, note, center: modalCtx.pendingCenter,
+        radius: Number(radiusInput.value)||500, startAngle: ((Number(startAngleInput.value)||0)%360+360)%360,
+        sweepAngle: Math.max(1, Math.min(360, Number(sweepAngleInput.value)||360)) };
+      if(modalCtx.previewLayer){ map.removeLayer(modalCtx.previewLayer); modalCtx.previewLayer = null; }
+      if(towerCenterMarker){ map.removeLayer(towerCenterMarker); towerCenterMarker = null; }
+      areas.push(area); renderArea(area); applyFilters(); renderList(); applyZoomLabelVisibility();
+      const ok = await persist();
+      overlay.style.display='none'; modalCtx = { mode:null, pendingCenter:null, editingArea:null, previewLayer:null };
+      if(ok) showToast('Tower coverage saved.');
+
+    } else if(modalCtx.mode === 'edit-details'){
+      const area = modalCtx.editingArea, entry = layerById[area.id];
+      if(!area || !entry) { closeModal(); return; }
+      pushUndo();
+      area.type = selectedType; area.towerName = towerName; area.volte = volte; area.vonr = vonr; area.note = note;
+      if(area.shapeType === 'sector'){
+        area.radius = Number(radiusInput.value)||500;
+        area.startAngle = ((Number(startAngleInput.value)||0)%360+360)%360;
+        area.sweepAngle = Math.max(1, Math.min(360, Number(sweepAngleInput.value)||360));
+        entry.polygon.setLatLngs(getAreaCoords(area));
+      }
+      entry.polygon.setStyle(styleFor(area.type));
+      entry.polygon.bindTooltip(areaLabel(area), { permanent:true, direction:'center', className:'cov-tooltip' });
+      applyZoomLabelVisibility();
+      const ok = await persist(); renderList();
+      overlay.style.display='none'; modalCtx = { mode:null, pendingCenter:null, editingArea:null, previewLayer:null };
+      if(ok) showToast('Details updated.');
+    }
+  });
+
+  // ---------------- init ----------------
+  initFirebase();
+  loadAreas();
+  makeModalDraggable();
+})();
+</script>
+</body>
+</html>
