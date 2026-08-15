@@ -74,7 +74,6 @@
   .area-card .actions{display:flex;gap:12px;margin-top:7px;}
   .area-card .actions button{font-size:11px;background:none;border:none;cursor:pointer;padding:0;}
   .area-card .edit{color:var(--accent);}
-  .area-card .dup{color:var(--text-dim);}
   .area-card .del{color:var(--danger);}
   .area-card .actions button:hover{text-decoration:underline;}
   #emptystate{padding:16px 14px;font-size:12.5px;color:var(--text-dim);text-align:center;}
@@ -150,10 +149,9 @@
   .pop-voflags{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
   .pop-voflag{font-size:10px;padding:2px 8px;border-radius:20px;background:#1c2b29;border:1px solid var(--accent-soft);color:var(--accent);letter-spacing:.03em;}
   .pop-note{font-size:12px;color:var(--accent);margin-bottom:10px;font-style:italic;line-height:1.4;}
-  .pop-actions{display:flex;gap:6px;flex-wrap:wrap;}
-  .pop-edit{background:var(--accent-soft);border:1px solid var(--accent);color:#eafffb;padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;}
-  .pop-dup{background:var(--panel-soft);border:1px solid var(--line);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;}
-  .pop-del{background:var(--danger);border:none;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;}
+  .pop-actions{display:flex;gap:8px;}
+  .pop-edit{background:var(--accent-soft);border:1px solid var(--accent);color:#eafffb;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;}
+  .pop-del{background:var(--danger);border:none;color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;}
   .choose-row{padding:7px 4px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12.5px;display:flex;justify-content:space-between;gap:8px;align-items:center;}
   .choose-row:last-child{border-bottom:none;}
   .choose-row:hover{color:var(--accent);}
@@ -317,7 +315,10 @@
     const meta = TYPE_META[type] || TYPE_META['4g'];
     return { color: MARK_COLOR, weight: 2.5, opacity: 0.95, fillColor: MARK_COLOR, fillOpacity: 0.16, dashArray: meta.dash };
   }
-  function areaLabel(area){ const meta = TYPE_META[area.type] || TYPE_META['4g']; return meta.label; }
+  function areaLabel(area){
+    const meta = TYPE_META[area.type] || TYPE_META['4g'];
+    return meta.label + ' ' + (area.shapeType==='sector' ? 'tower' : 'area');
+  }
   function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function voFlagsHtml(area, cls){
     let html = '';
@@ -358,11 +359,6 @@
   }
 
   // ---------------- firebase (auth + firestore storage) ----------------
-  // Fill in firebaseConfig with the values from your Firebase project:
-  // Firebase Console → Project settings → General → "Your apps" → SDK setup and configuration.
-  // Reusing the same project/config as the original coverage map so the same admin account
-  // and Firestore project can be used — just make sure this page's URL is added to the
-  // Firebase Auth "Authorized domains" list too.
   const firebaseConfig = {
     apiKey: "AIzaSyC2_VzItT0OF_HR8NQoURuhHZb0AEERCkQ",
     authDomain: "wazyoscoveragemap.firebaseapp.com",
@@ -373,7 +369,6 @@
     measurementId: "G-ZSVEFLWTKG"
   };
   const ADMIN_EMAIL = 'waz.shakeer1@gmail.com'; // only this Google account can add/edit/remove towers
-  // Stored in its own doc so it never collides with data written by the original coverage map.
   const AREAS_DOC_PATH = ['coverage', 'towerAreas']; // collection, doc
 
   let db = null, auth = null, currentUser = null, isAdmin = false, firebaseOk = false;
@@ -464,8 +459,6 @@
   async function persist(){
     if(!firebaseOk){ showToast('Firebase isn\'t configured — change not saved.'); return false; }
     try{
-      // Firestore rejects arrays nested inside arrays (polygon coordinate lists are exactly that),
-      // so the whole areas list is stored as a JSON string instead of raw nested arrays.
       await areasDocRef().set({ areasJson: JSON.stringify(areas), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
       return true;
     }
@@ -603,12 +596,11 @@
   function buildPopupHtml(area){
     const meta = TYPE_META[area.type] || TYPE_META['4g'];
     const voHtml = voFlagsHtml(area, 'pop-voflag');
-    return `<div class="pop-title">${meta.label} coverage zone</div>
+    return `<div class="pop-title">${meta.label} — ${escapeHtml(areaLabel(area))}</div>
        ${voHtml ? `<div class="pop-voflags">${voHtml}</div>` : ''}
        ${area.note ? `<div class="pop-note">${escapeHtml(area.note)}</div>` : ''}
        ${isAdmin ? `<div class="pop-actions">
          <button class="pop-edit" data-id="${area.id}">Edit shape</button>
-         <button class="pop-dup" data-id="${area.id}">Duplicate</button>
          <button class="pop-del" data-id="${area.id}">Remove</button>
        </div>` : ''}`;
   }
@@ -617,10 +609,8 @@
     if(!area) return;
     const popup = L.popup({ maxWidth:280 }).setLatLng(latlng).setContent(buildPopupHtml(area)).openOn(map);
     const editBtn = document.querySelector(`.pop-edit[data-id="${area.id}"]`);
-    const dupBtn = document.querySelector(`.pop-dup[data-id="${area.id}"]`);
     const delBtn = document.querySelector(`.pop-del[data-id="${area.id}"]`);
     if(editBtn) editBtn.addEventListener('click', ()=>{ map.closePopup(); startEditArea(area.id); });
-    if(dupBtn) dupBtn.addEventListener('click', ()=> duplicateArea(area.id));
     if(delBtn) delBtn.addEventListener('click', ()=> removeArea(area.id));
   }
 
@@ -647,28 +637,6 @@
     showToast('Tower removed.');
   }
 
-  async function duplicateArea(id){
-    if(!isAdmin){ showToast('Sign in as the map owner to duplicate coverage zones.'); return; }
-    const source = areas.find(a => a.id===id);
-    if(!source) return;
-    map.closePopup();
-    pushUndo();
-    const copy = JSON.parse(JSON.stringify(source));
-    copy.id = 'a_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
-    // Nudge the copy slightly so it doesn't sit exactly on top of the original — drag it into place.
-    const OFFSET = 0.0015; // roughly 150m
-    if(copy.shapeType === 'sector'){
-      copy.center = [copy.center[0] + OFFSET, copy.center[1] + OFFSET];
-    } else {
-      copy.coords = copy.coords.map(c => [c[0] + OFFSET, c[1] + OFFSET]);
-    }
-    areas.push(copy);
-    renderArea(copy);
-    applyFilters(); renderList(); applyZoomLabelVisibility();
-    const ok = await persist();
-    if(ok) showToast('Coverage zone duplicated — drag it into place.');
-  }
-
   function renderList(){
     const list = document.getElementById('arealist');
     if(!areas.length){ list.innerHTML = '<div id="emptystate">No towers yet. Draw a polygon or a tower circle to add one.</div>'; return; }
@@ -679,18 +647,18 @@
       const card = document.createElement('div');
       card.className = 'area-card';
       card.innerHTML = `
-        <div class="row1"><span>${area.shapeType==='sector' ? 'Tower circle' : 'Polygon area'}</span><span class="badge">${meta.label}</span></div>
+        <div class="row1"><span>${escapeHtml(areaLabel(area))}</span><span class="badge">${meta.label}</span></div>
+        <div class="sub">${area.shapeType==='sector' ? 'Tower circle' : 'Polygon area'}</div>
         ${voHtml ? `<div class="voflags">${voHtml}</div>` : ''}
         ${area.note ? `<div class="note">${escapeHtml(area.note)}</div>` : ''}
-        ${isAdmin ? `<div class="actions"><button class="edit">Edit shape</button><button class="dup">Duplicate</button><button class="del">Remove</button></div>` : ''}`;
+        ${isAdmin ? `<div class="actions"><button class="edit">Edit shape</button><button class="del">Remove</button></div>` : ''}`;
       card.addEventListener('click', (e)=>{
-        if(e.target.classList.contains('del') || e.target.classList.contains('edit') || e.target.classList.contains('dup')) return;
+        if(e.target.classList.contains('del') || e.target.classList.contains('edit')) return;
         const entry = layerById[area.id];
         if(entry){ map.fitBounds(entry.polygon.getBounds(), {maxZoom:16}); openDetailPopup(area, entry.polygon.getBounds().getCenter()); }
       });
       const delBtn = card.querySelector('.del'); if(delBtn) delBtn.addEventListener('click', (e)=>{ e.stopPropagation(); removeArea(area.id); });
       const editBtn = card.querySelector('.edit'); if(editBtn) editBtn.addEventListener('click', (e)=>{ e.stopPropagation(); startEditArea(area.id); });
-      const dupBtn = card.querySelector('.dup'); if(dupBtn) dupBtn.addEventListener('click', (e)=>{ e.stopPropagation(); duplicateArea(area.id); });
       list.appendChild(card);
     });
   }
@@ -725,7 +693,6 @@
     if(activeDrawMode === 'polygon') handlePlacePoint(e.latlng);
     else if(activeDrawMode === 'circle') handlePlaceCenter(e.latlng);
   });
-  // Fires only when the click didn't land on a coverage-area polygon (those call stopPropagation themselves).
   map.on('click', ()=>{
     if(suppressEmptyClick){ suppressEmptyClick = false; return; }
     if(activeDrawMode || editingId) return;
@@ -1053,14 +1020,14 @@
     } else {
       selectedType = '4g';
       document.querySelectorAll('.type-choice button').forEach(b=>b.classList.toggle('sel', b.dataset.type==='4g'));
-      towerNameInput.value = ''; noteInput.value = '';
+      noteInput.value = '';
       volteInput.checked = false; vonrInput.checked = false; syncVoChoiceStyle();
       radiusInput.value = 500; startAngleInput.value = 0; sweepAngleInput.value = 360;
       presetRow.querySelectorAll('button').forEach(b=>b.classList.toggle('sel', b.dataset.sweep==='360'));
       if(mode === 'create-sector') refreshShapePreview();
     }
     overlay.style.display = 'flex';
-    setTimeout(()=>towerNameInput.focus(), 50);
+    setTimeout(()=>noteInput.focus(), 50);
   }
 
   function makeModalDraggable(){
@@ -1071,7 +1038,6 @@
     function onDown(e){
       const p = e.touches ? e.touches[0] : e;
       const rect = modalEl.getBoundingClientRect();
-      // switch from flex-centered to fixed positioning at its current spot
       modalEl.classList.add('dragged');
       modalEl.style.left = rect.left + 'px';
       modalEl.style.top = rect.top + 'px';
@@ -1108,7 +1074,6 @@
 
   document.getElementById('modalSave').addEventListener('click', async ()=>{
     if(!isAdmin){ showToast('Sign in as the map owner to save changes.'); closeModal(); return; }
-    const towerName = towerNameInput.value.trim();
     const note = noteInput.value.trim();
     const volte = volteInput.checked, vonr = vonrInput.checked;
 
@@ -1116,7 +1081,7 @@
       if(!pendingCoords) return;
       pushUndo();
       const area = { id:'a_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), shapeType:'polygon',
-        type:selectedType, towerName, volte, vonr, note, coords: pendingCoords };
+        type:selectedType, volte, vonr, note, coords: pendingCoords };
       areas.push(area); renderArea(area); applyFilters(); renderList(); applyZoomLabelVisibility();
       const ok = await persist(); closeModal(); if(ok) showToast('Tower coverage saved.');
 
@@ -1124,7 +1089,7 @@
       if(!modalCtx.pendingCenter) return;
       pushUndo();
       const area = { id:'a_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), shapeType:'sector',
-        type:selectedType, towerName, volte, vonr, note, center: modalCtx.pendingCenter,
+        type:selectedType, volte, vonr, note, center: modalCtx.pendingCenter,
         radius: Number(radiusInput.value)||500, startAngle: ((Number(startAngleInput.value)||0)%360+360)%360,
         sweepAngle: Math.max(1, Math.min(360, Number(sweepAngleInput.value)||360)) };
       if(modalCtx.previewLayer){ map.removeLayer(modalCtx.previewLayer); modalCtx.previewLayer = null; }
@@ -1138,7 +1103,7 @@
       const area = modalCtx.editingArea, entry = layerById[area.id];
       if(!area || !entry) { closeModal(); return; }
       pushUndo();
-      area.type = selectedType; area.towerName = towerName; area.volte = volte; area.vonr = vonr; area.note = note;
+      area.type = selectedType; area.volte = volte; area.vonr = vonr; area.note = note;
       if(area.shapeType === 'sector'){
         area.radius = Number(radiusInput.value)||500;
         area.startAngle = ((Number(startAngleInput.value)||0)%360+360)%360;
